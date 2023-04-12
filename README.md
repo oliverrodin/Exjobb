@@ -3,291 +3,176 @@
 
 ## Komponentlogik utan React Query
 ```tsx
-export const ChatActionDropdown = (props: ChatActionDropdownProps) => {
-  const {
-    refetchChatRoom,
-    chatRoom,
-    members,
-    onClickLeave,
-    onClickAddMember,
-    chatRoomOpen,
-    onClickJoinChat,
-  } = props;
-  const { t } = useTranslation(['chat']);
-
-  // Global States
+const HomePage = () => {
+  const { t } = useTranslation(['news', 'common']);
+  const theme = useTheme();
   const { loggedInUser } = useGlobals();
+  const { categoriesOptions } = useFetchCategories(true);
   const isMounted = useIsMounted();
+  // Local states
+  const [optionsName, setOptionsName] = useState<string>('Alla');
+  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState<Array<NewsResponse> | undefined>([]);
+  const [search, setSearch] = useState('');
+  const [pageIndex, setPageIndex] = useState(0);
+  const [totalPages, setTotalPages] = useState<number>();
+  const [hasMore, setHasMore] = useState<boolean>(false);
+  const [activeNewsItemId, setActiveNewsItemId] = useState<string>();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
-  // Local state
-  const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [newName, setNewName] = useState<string>(chatRoom.Name);
-  const [isPublic, setIsPublic] = useState<boolean>(false);
-  const [isPinned, setIsPinned] = useState<boolean>(false);
-  const [showNameDialog, setShowNameDialog] = useState<boolean>(false);
-  const [openDeleteChatDialog, setOpenDeleteChatDialog] =
-    useState<boolean>(false);
+  // Sätter title i tab
+  useChangeTitle(t('common:pageTabs.news'));
 
-  const userIsSystemAdmin = loggedInUser?.UserType === 1;
-  const userIsChatRoomAdmin = loggedInUser?.GUID === chatRoom?.UserID;
-  const loggedInChatMember = members?.find(
-    (m) => m.UserID === loggedInUser?.GUID,
+  const debouncedSearchTerm = useDebounce(search, 300);
+
+  const observer: any = useRef();
+  const lastNewsRef = useCallback(
+    (node: any) => {
+      if (loading) return;
+      if (observer.current) observer.current.disconnect();
+      observer.current = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting && hasMore) {
+          setPageIndex((prev) => prev + 1);
+        }
+      });
+      if (node) observer.current.observe(node);
+    },
+    [loading, hasMore],
   );
 
-  // Handle anchor and open/close menu
-  const open = Boolean(anchorEl);
-  const handleClick = (event: React.MouseEvent<HTMLElement>) => {
-    setAnchorEl(event.currentTarget);
-  };
-  const handleClose = () => {
-    setAnchorEl(null);
-  };
-
-  const onSaveChatRoomName = async () => {
-    const api = new ChatRoomAPI();
+  // Hämta nyheter
+  const fetchNews = useCallback(async () => {
+    const newsApi = new NewsAPI();
     setLoading(true);
-    const currentUserIDs = members?.map((m) => m.UserID);
-    const chatRoomData = {
-      ID: chatRoom.ID,
-      Type: chatRoom.Type,
-      UserIDs: currentUserIDs,
-      Name: newName,
-    };
-
+    ConsoleHelper.log('fetching news on homePage.js');
     try {
-      await api.Update(chatRoomData);
+      const reqOptions = new NewsOptions();
+      reqOptions.Category = optionsName ?? 'Alla';
+      reqOptions.PageIndex = pageIndex;
+      reqOptions.PageSize = 10;
+      reqOptions.Filter = debouncedSearchTerm;
+
+      const res = await newsApi.GetAll(reqOptions);
       if (isMounted()) {
-        refetchChatRoom();
-      }
-    } catch (err: any) {
-      if (isMounted()) {
-        toast.error(
-          `${t('somethingWentWrong')} 
-          ${
-            err?.response?.data?.Message !== 'An error has occurred.'
-              ? err?.response?.data?.Message
-              : t('takeABreathAndTryAgain')
-          }`,
+        ConsoleHelper.log(
+          'FetchNews result for pageIndex',
+          pageIndex,
+          res.Results,
         );
+        if (res.Results && res.Results.length > 0) {
+          if (pageIndex === 0) {
+            setData(res.Results);
+            setTotalPages(res.TotalPages);
+          } else {
+            setData((prev) => [...(prev || []), ...res.Results]);
+            setTotalPages(res.TotalPages);
+          }
+          setHasMore(res.Results.length >= 10);
+        } else {
+          setData(undefined);
+        }
+      }
+    } catch (error: any) {
+      if (isMounted()) {
+        ConsoleHelper.log(error);
+        setData(undefined);
       }
     } finally {
       if (isMounted()) {
         setLoading(false);
       }
     }
-  };
+  }, [optionsName, pageIndex, debouncedSearchTerm, isMounted]);
 
-  const onPressTogglePrivate = async (value: boolean) => {
-    const api = new ChatRoomAPI();
-    setIsPublic(value);
-    setLoading(true);
-    const currentUserIDs = members?.map((m) => m.UserID);
-    const chatRoomData = {
-      ID: chatRoom.ID,
-      Name: chatRoom.Name,
-      Type: value ? 1 : 2, // Om toggle isPublic = true sätt Type 1, om isPublic = false sätt Type 2
-      UserIDs: currentUserIDs,
-    };
-
+  // Hämta om news by id och ersätt motsvarande guid/id i befitnlig array efter action för att få nytt data utan at fucka upp paging
+  const replaceNewsItemAfterAction = async (item: NewsResponse) => {
+    const newsApi = new NewsAPI();
     try {
-      await api.Update(chatRoomData);
-      if (isMounted()) {
-        refetchChatRoom();
-      }
-    } catch (err: any) {
-      if (isMounted()) {
-        ConsoleHelper.log('ERR toggle type', err);
-        setIsPublic(chatRoom.Type === 1);
-
-        toast.error(
-          `${t('somethingWentWrong')}
-          ${
-            err?.response?.data?.Message !== 'An error has occurred.'
-              ? err?.response?.data?.Message
-              : t('takeABreathAndTryAgain')
-          }`,
-        );
-      }
-    } finally {
-      if (isMounted()) {
-        setLoading(false);
-      }
-    }
-  };
-
-  const onPressPinRoom = async (value: boolean) => {
-    setLoading(true);
-    setIsPinned(value);
-    const api = new ChatRoomAPI();
-    try {
-      const res = await api.TogglePinRoom(chatRoom.ID);
-      if (isMounted()) {
-        ConsoleHelper.log('RES toggle pin', res);
-        refetchChatRoom();
-      }
-    } catch (err: any) {
-      if (isMounted()) {
-        ConsoleHelper.log('ERROR pin room', err);
-        toast.error(
-          `${t('somethingWentWrong')} 
-          ${
-            err?.response?.data?.Message !== 'An error has occurred.'
-              ? err?.response?.data?.Message
-              : t('takeABreathAndTryAgain')
-          }`,
-        );
-        setIsPinned(chatRoom.IsPinned);
-      }
-    } finally {
-      if (isMounted()) {
-        setLoading(false);
-      }
-    }
-  };
-
-  const deleteChatRoom = async (ID: number) => {
-    setLoading(true);
-    const api = new ChatRoomAPI();
-    try {
-      await api.Delete(ID);
-      if (isMounted()) {
-        toast.success(t('Done'));
-      }
-    } catch (err: any) {
-      if (isMounted()) {
-        toast.error(t('somethingWentWrong'), t('takeABreathAndTryAgain'));
-      }
-    } finally {
-      if (isMounted()) {
-        setLoading(false);
-      }
+      const updatedItem = await newsApi.Get(item?.GUID);
+      // data?.map((obj) => (updatedItem.ID === obj.ID ? updatedItem : obj));
+      const updatedArray = data?.map((obj) =>
+        updatedItem.GUID === obj.GUID ? updatedItem : obj,
+      );
+      setData(updatedArray); // Funkade inte utan setData?
+      ConsoleHelper.log('replaceNewsItemAfterAction färdig');
+    } catch (err) {
+      ConsoleHelper.log('ERROR replace nyhets data efter action', err);
     }
   };
 
   useEffect(() => {
-    setIsPublic(chatRoom.Type === 1);
-    setIsPinned(chatRoom.IsPinned);
-  }, [chatRoom]);
+    fetchNews();
+  }, [fetchNews]);
 
-  return (
-		// code...
-  )
+  const handleSearch = (event: any) => {
+    setPageIndex(0);
+    setSearch(event.target.value);
+  };
+
+  const handleActiveNewsItemId = (newsItemId: string) => {
+    setActiveNewsItemId(
+      activeNewsItemId === newsItemId ? undefined : newsItemId,
+    );
+  };
+
 ```
 
 ## Komponentlogik med React Query
 ```tsx
-export const ChatActionDropdown = (props: ChatActionDropdownProps) => {
-  const { onClickLeave, onClickAddMember, chatRoomOpen, onClickJoinChat } =
-    props;
-  const { t } = useTranslation(['chat']);
+const HomePage = () => {
+  const { t } = useTranslation(['news', 'common']);
+  const theme = useTheme();
 
-  // Global States
-  const { loggedInUser, currentChatRoom } = useGlobals();
+  // Global states
+  const { loggedInUser } = useGlobals();
 
-  // useQuery
-  const members = useFetchChatRoomEmployees({
-    ChatRoomID: currentChatRoom?.ID,
-  });
-  const chatRoom = useFetchChatRoomById(currentChatRoom?.ID ?? 0);
+  // Local states
+  const [optionsName, setOptionsName] = useState<string>('Alla');
+  const [search, setSearch] = useState('');
+  const [activeNewsItemId, setActiveNewsItemId] = useState<string>();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
-  // useMutation
-  const updateChatRoomName = useMutationUpdateChatRoomName(
-    chatRoom?.data?.ID ?? 0,
-  );
-  const togglePrivate = useMutationTogglePrivate(chatRoom?.data?.ID ?? 0);
-  const togglePinRoom = useMutationTogglePinRoom({
-    chatRoomId: chatRoom?.data?.ID ?? 0,
-    isPinned: chatRoom.data?.IsPinned ?? false,
-  });
-  const deleteChatRoom = useMutationDeleteChatRoom();
+  // Sätter title i tab
+  useChangeTitle(t('common:pageTabs.news'));
 
-  // Local state
-  const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null);
-  const [newName, setNewName] = useState<string>(chatRoom?.data?.Name ?? '');
-  const [showNameDialog, setShowNameDialog] = useState<boolean>(false);
-  const [openDeleteChatDialog, setOpenDeleteChatDialog] =
-    useState<boolean>(false);
+  const debouncedSearchTerm = useDebounce(search, 300);
 
-  const userIsSystemAdmin = loggedInUser?.UserType === 1;
-  const userIsChatRoomAdmin = loggedInUser?.GUID === chatRoom.data?.UserID;
-  const loggedInChatMember = members.data?.find(
-    (m) => m.UserID === loggedInUser?.GUID,
-  );
-
-  // Handle anchor and open/close menu
-  const open = Boolean(anchorEl);
-  const handleClick = (event: React.MouseEvent<HTMLElement>) => {
-    setAnchorEl(event.currentTarget);
-  };
-  const handleClose = () => {
-    setAnchorEl(null);
-  };
-
-  const onSaveChatRoomName = async () => {
-    let currentUserIDs = [] as string[];
-    if (members.data) {
-      currentUserIDs = members.data.map((m) => m.UserID);
-    }
-    if (chatRoom.data) {
-      const chatRoomData = {
-        ID: chatRoom.data.ID,
-        Type: chatRoom.data.Type,
-        UserIDs: currentUserIDs,
-        Name: newName,
-      };
-      updateChatRoomName.mutate(chatRoomData, {
-        onError: () => {
-          toast.error(`${t('somethingWentWrong')}`);
-        },
-      });
-    }
-  };
-
-  const onPressTogglePrivate = async (value: boolean) => {
-    let currentUserIDs = [] as string[];
-    if (members.data) {
-      currentUserIDs = members.data.map((m) => m.UserID);
-    }
-    if (chatRoom.data) {
-      const chatRoomData = {
-        ID: chatRoom.data.ID,
-        Name: chatRoom.data.Name,
-        Type: value ? 1 : 2, // Om toggle isPublic = true sätt Type 1, om isPublic = false sätt Type 2
-        UserIDs: currentUserIDs,
-      };
-      togglePrivate.mutate(chatRoomData, {
-        onError: () => {
-          toast.error(`${t('somethingWentWrong')}`);
-        },
-      });
-    }
-  };
-
-  const onPressPinRoom = async (value: boolean) => {
-    if (chatRoom.data) {
-      togglePinRoom.mutate(chatRoom.data.ID, {
-        onError: () => {
-          toast.error(`${t('somethingWentWrong')}`);
-        },
-      });
-    }
-  };
-
-  const deleteChatRoomHandler = async (ID: number) => {
-    deleteChatRoom.mutate(ID, {
-      onSuccess: () => {
-        setOpenDeleteChatDialog(false);
-        chatRoomOpen(false);
-        toast.success(t('Done'));
-      },
-      onError: () => {
-        toast.error(t('somethingWentWrong'), t('takeABreathAndTryAgain'));
-      },
+  // React Query
+  const categoriesOptions = useFetchNewsCategories(true);
+  const { fetchNextPage, hasNextPage, isFetchingNextPage, data, isLoading } =
+    useFetchNews({
+      Category: optionsName ?? 'Alla',
+      Filter: debouncedSearchTerm,
     });
+
+  const intObserver: any = useRef();
+  const lastNewsRef = useCallback(
+    (node) => {
+      if (isFetchingNextPage) return;
+
+      if (intObserver.current) intObserver.current.disconnect();
+
+      intObserver.current = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting && hasNextPage) {
+          ConsoleHelper.log('We are near the last post!');
+          fetchNextPage();
+        }
+      });
+
+      if (node) intObserver.current.observe(node);
+    },
+    [isFetchingNextPage, hasNextPage, fetchNextPage],
+  );
+
+  const handleSearch = (event: any) => {
+    setSearch(event.target.value);
   };
 
+  const handleActiveNewsItemId = (newsItemId: string) => {
+    setActiveNewsItemId(
+      activeNewsItemId === newsItemId ? undefined : newsItemId,
+    );
+  };
+  console.log(data?.pages);
   return (
-    // code...
-  )
 ```
